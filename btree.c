@@ -1,3 +1,4 @@
+#include <string.h>
 #include <assert.h>
 
 #include "btree.h"
@@ -44,7 +45,7 @@ btree_insert(struct Btree_Head *head, uint32_t key)
 
 		/* Splitting, pt. 1: create new leaf */
 		assert(x->nvals == BTREE_2K);
-		struct Btree_Leaf *y = xmalloc(sizeof(*sib));
+		struct Btree_Leaf *y = xmalloc(sizeof(*y));
 		INIT_LIST_HEAD(&y->h);
 		uint32_t *ys = y->vals;
 

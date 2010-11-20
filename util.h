@@ -1,7 +1,12 @@
 #ifndef _UTIL_H
 #define _UTIL_H
 
+#include <error.h>
+#include <errno.h>
 #include <stdlib.h>
+
+#define die(format, ...)  error(1, 0, format, ##__VA_ARGS__)
+#define die_errno(format, ...)  error(1, errno, format, ##__VA_ARGS__)
 
 static inline void *
 xmalloc(size_t size)
