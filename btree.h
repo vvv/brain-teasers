@@ -51,7 +51,11 @@ enum { BTREE_K = 25, BTREE_2K = 2*BTREE_K };
 struct Btree_Head {
 	void *root;
 	uint8_t height;
+	struct list_head leaves;
 };
+
+#define BTREE_HEAD(NAME) \
+	struct Btree_Head NAME = { NULL, 0, LIST_HEAD_INIT(NAME.leaves) }
 
 struct Btree_Node {
 	uint32_t keys[BTREE_2K];
@@ -70,6 +74,15 @@ struct Btree_Leaf {
 	struct list_head h; /* Leaves are chained together */
 };
 
+/*
+ * Insert new key (which is also a value in our case) into the tree.
+ *
+ * Return -1 if insertion failed (e.g., there is such key in the tree
+ * already). Return 0 upon success.
+ */
 int btree_insert(struct Btree_Head *head, uint32_t key);
+
+/* Delete the tree, freeing allocated resources */
+void btree_destroy(struct Btree_Head *head);
 
 #endif /* _BTREE_H */

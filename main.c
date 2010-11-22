@@ -4,8 +4,10 @@
 
 int main(void)
 {
-	struct Btree_Head t = { NULL, 0 };
+	BTREE_HEAD(t);
 	assert(btree_insert(&t, 85) == 0);
+
+	btree_destroy(&t);
 
 	return 0;
 }
