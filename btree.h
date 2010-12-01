@@ -37,7 +37,7 @@
 #include "list.h"
 
 /*
- * The value m = 2k, where k is a natural number from B-tree
+ * The value m = 2k + 1, where k is a natural number from B-tree
  * definition (above), is called the _order_ of B-tree.
  */
 #ifdef DEBUG
@@ -58,18 +58,18 @@ struct Btree_Head {
 	struct Btree_Head NAME = { NULL, 0, LIST_HEAD_INIT(NAME.leaves) }
 
 struct Btree_Node {
-	uint32_t keys[BTREE_2K];
-	void *sons[BTREE_2K + 1];
 	uint8_t nkeys; /* Number of keys in this node.
 			* Invariant: k < nkeys <= 2*k;
 			* for the root node: 0 < nkeys <= 2*k. */
+	uint32_t keys[BTREE_2K];
+	void *sons[BTREE_2K + 1];
 };
 
 struct Btree_Leaf {
-	uint32_t vals[BTREE_2K];
 	uint8_t nvals; /* Number of values in this leaf.
 			* Invariant: k < nvals <= 2*k;
 			* for the root leaf: 0 < nvals <= 2*k. */
+	uint32_t vals[BTREE_2K];
 
 	struct list_head h; /* Leaves are chained together */
 };
