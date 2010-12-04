@@ -4,6 +4,109 @@
 #include "btree.h"
 #include "util.h"
 
+static size_t
+_index(uint32_t x, uint32_t arr[], size_t size)
+{
+	size_t i;
+	for (i = 0; i < size; ++i) { /* XXX use binary search */
+		if (arr[i] >= x)
+			break;
+	}
+	return i;
+}
+
+/* Backtrace element */
+struct Frame {
+	struct list_head h;
+
+	struct Btree_Node *node; /* Pointer to the node */
+	size_t idx; /* Index of the node's son that we descend into */
+};
+
+static void
+push(struct list_head *bt, struct Btree_Node *node, size_t idx)
+{
+	struct Frame *new = xmalloc(sizeof(*new));
+	INIT_LIST_HEAD(&new->h);
+	new->node = node;
+	new->idx = idx;
+
+	list_add(&new->h, bt);
+}
+
+/*
+ * Find the leaf that would hold the given key,
+ *
+ * This function ignores the fact that the leaf may be full.
+ *
+ * @bt: backtrace of interior nodes -- the path from the root to the
+ *      target leaf, excluding the latter
+ */
+static struct Btree_Leaf *
+target_leaf(const struct Btree_Head *head, uint32_t key, struct list_head *bt)
+{
+	assert(head->root != NULL);
+	assert(list_empty(bt));
+
+	const struct Btree_Node *x = head->root;
+
+	uint8_t h;
+	for (h = head->height; h != 0; --h) {
+		const size_t i = _index(key, x->keys, x->size);
+		push(bt, x, i);
+		x = x->sons[i];
+	}
+
+	return (struct Btree_Leaf *) x;
+}
+
+static struct Btree_Leaf *
+left_brother(const struct Btree_Leaf *x, const struct list_head *bt)
+{
+	if (list_empty(bt))
+		return NULL;
+	const struct Frame *p = list_first_entry(bt, struct Frame, h);
+	return p->idx == 0 ? NULL : p->node->sons[p->idx - 1];
+}
+
+static struct Btree_Leaf *
+right_brother(const struct Btree_Leaf *x, const struct list_head *bt)
+{
+	if (list_empty(bt))
+		return NULL;
+	const struct Frame *p = list_first_entry(bt, struct Frame, h);
+	return p->idx == p->node->size ? NULL : p->node->sons[p->idx + 1];
+}
+
+int
+btree_insert(struct Btree_Head *head, uint32_t key)
+{
+	LIST_HEAD(bt); /* backtrace */
+	struct Btree_Leaf *x = target_leaf(head, key, &bt);
+	const size_t i = _index(key, x->vals, x->size);
+
+	if (i < x->size && x->vals[i] == key)
+		return -1; /* key exists */
+
+	if (x->size < ARRAY_SIZE(x->vals)) {
+		if (i < x->size)
+			memmove(x->vals + i + 1, x->vals + i, x->size - i);
+
+		x->vals[i] = key;
+		++x->size;
+
+		return 0;
+	}
+
+#warning "XXX Check left/right brothers for vacancies."
+
+	struct Btree_Leaf *y = left_brother(x, &bt);
+
+	/* The leaf is full and needs to be splitted. */
+	assert(0 == 1); /* XXX not implemented */
+}
+
+#if 0 /* XXX ======================================================== */
 int
 btree_insert(struct Btree_Head *head, uint32_t key)
 {
@@ -14,7 +117,7 @@ btree_insert(struct Btree_Head *head, uint32_t key)
 		INIT_LIST_HEAD(&x->h);
 
 		*x->vals = key;
-		x->nvals = 1;
+		x->size = 1;
 
 		head->root = x;
 		++head->height;
@@ -29,30 +132,30 @@ btree_insert(struct Btree_Head *head, uint32_t key)
 		uint32_t *xs = x->vals;
 
 		/* Find location */
-		for (i = 0; i < x->nvals; ++i) {
+		for (i = 0; i < x->size; ++i) {
 			if (xs[i] > key)
 				break;
 			else if (xs[i] == key)
 				return -1; /* already present */
 		}
 
-		if (x->nvals < BTREE_2K) { /* no need to split */
+		if (x->size < BTREE_2K) { /* no need to split */
 			if (i != BTREE_2K - 1)
 				memmove(xs + i + 1, xs + i,
 					(BTREE_2K - i - 1) * sizeof(*xs));
 			xs[i] = key;
-			++x->nvals;
+			++x->size;
 			return 0;
 		}
 
 		/* Splitting, pt. 1: create a sibling leaf */
-		assert(x->nvals == BTREE_2K);
+		assert(x->size == BTREE_2K);
 		struct Btree_Leaf *y = xmalloc(sizeof(*y));
 		INIT_LIST_HEAD(&y->h);
 		uint32_t *ys = y->vals;
 
-		x->nvals = BTREE_K + 1;
-		y->nvals = BTREE_K;
+		x->size = BTREE_K + 1;
+		y->size = BTREE_K;
 		list_add(&y->h, &x->h);
 
 		if (i <= BTREE_K) {
@@ -74,7 +177,7 @@ btree_insert(struct Btree_Head *head, uint32_t key)
 
 		/* Splitting, pt. 2: create new root */
 		struct Btree_Node *root = xmalloc(sizeof(*root));
-		root->nkeys = 1;
+		root->size = 1;
 		root->keys[0] = xs[BTREE_K];
 		root->sons[0] = x;
 		root->sons[1] = y;
@@ -86,22 +189,6 @@ btree_insert(struct Btree_Head *head, uint32_t key)
 	}
 
 	assert(0 == 1); /* XXX not implemented */
-}
-
-/* Backtrace element */
-struct Frame {
-	struct list_head h;
-	struct Btree_Node *node;
-};
-
-static void
-push(struct list_head *bt, struct Btree_Node *node)
-{
-	struct Frame *new = xmalloc(sizeof(*new));
-	INIT_LIST_HEAD(&new->h);
-	new->node = node;
-
-	list_add(&new->h, bt);
 }
 
 static struct Btree_Node *
@@ -131,8 +218,8 @@ btree_destroy(struct Btree_Head *head)
 		uint8_t depth = 0;
 
 		for (;;) {
-			if ((son = node->sons[node->nkeys]) == NULL) {
-				assert(node->nkeys == 0);
+			if ((son = node->sons[node->size]) == NULL) {
+				assert(node->size == 0);
 				if (depth == 0)
 					goto end;
 
@@ -144,15 +231,15 @@ btree_destroy(struct Btree_Head *head)
 			if (depth == head->height - 2) {
 				/* right above leaf level */
 				size_t i;
-				for (i = 0; i <= node->nkeys; ++i)
+				for (i = 0; i <= node->size; ++i)
 					free(node->sons[i]);
-				node->nkeys = 0;
+				node->size = 0;
 				*node->sons = NULL;
 			} else {
-				if (node->nkeys == 0)
+				if (node->size == 0)
 					*node->sons = NULL;
 				else
-					--node->nkeys;
+					--node->size;
 
 				push(&bt, node);
 				node = son;
@@ -165,7 +252,6 @@ end:
 	free(head->root);
 }
 
-#if 0 /*XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX*/
 100 110 120 130 140 150 160 170  (k=4)
   5  i=0    5 100 110 120 130 - 140 150 160 170  i < k
 105  i=1  100 105 110 120 130 - 140 150 160 170  i < k
@@ -210,4 +296,4 @@ digraph G {
 	root:p3 -> n_1_4;
 	root:p4 -> n_1_5;
 }
-#endif /*XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX*/
+#endif /* XXX ======================================================= */

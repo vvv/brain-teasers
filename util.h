@@ -5,6 +5,8 @@
 #include <errno.h>
 #include <stdlib.h>
 
+#define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
+
 #define die(format, ...)  error(1, 0, format, ##__VA_ARGS__)
 #define die_errno(format, ...)  error(1, errno, format, ##__VA_ARGS__)
 
