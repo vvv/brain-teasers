@@ -49,7 +49,7 @@ enum { BTREE_K = 25, BTREE_2K = 2*BTREE_K };
 #endif
 
 struct Btree_Head {
-	void *root;
+	struct Btree_Node *root;
 	uint8_t height;
 	struct list_head leaves;
 };
@@ -58,33 +58,27 @@ struct Btree_Head {
 	struct Btree_Head NAME = { NULL, 0, LIST_HEAD_INIT(NAME.leaves) }
 
 struct Btree_Node {
-	uint8_t size; /* Number of keys in this node.
+	uint8_t size; /* Number of _keys_ in this node.
 		       * Invariant: k < size <= 2*k;
 		       * for the root node: 0 < size <= 2*k. */
 	uint32_t keys[BTREE_2K];
-	void *sons[BTREE_2K + 1]; /* XXX union { sons; lh; } */
+	union {
+		struct Btree_Node *sons[BTREE_2K+1];
+		struct list_head leaf;
+	} u;
 };
 
-struct Btree_Leaf {
-	uint8_t size; /* Number of values in this leaf.
-		       * Invariant: k < size <= 2*k;
-		       * for the root leaf: 0 < size <= 2*k. */
-	uint32_t vals[BTREE_2K];
-
-	struct list_head h; /* Leaves are chained together */
-};
-
-#if 0 /* XXX ======================================================== */
 /*
- * Insert new key (which is also a value in our case) into the tree.
+ * Insert new key into the tree.
  *
- * Return -1 if insertion failed (e.g., there is such key in the tree
- * already). Return 0 upon success.
+ * A key is also a value in our case.
+ *
+ * Return values: 0 - success, -1 - error (e.g., attempting to insert
+ * existing key).
  */
 int btree_insert(struct Btree_Head *head, uint32_t key);
 
 /* Delete the tree, freeing allocated resources */
 void btree_destroy(struct Btree_Head *head);
-#endif /* XXX ======================================================= */
 
 #endif /* _BTREE_H */

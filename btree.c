@@ -1,15 +1,16 @@
 #include <string.h>
+#include <stdbool.h>
 #include <assert.h>
 
 #include "btree.h"
 #include "util.h"
 
 static size_t
-_index(uint32_t x, uint32_t arr[], size_t size)
+_index(uint32_t k, const uint32_t arr[], size_t size)
 {
 	size_t i;
 	for (i = 0; i < size; ++i) { /* XXX use binary search */
-		if (arr[i] >= x)
+		if (arr[i] >= k)
 			break;
 	}
 	return i;
@@ -20,18 +21,76 @@ struct Frame {
 	struct list_head h;
 
 	struct Btree_Node *node; /* Pointer to the node */
-	size_t idx; /* Index of the node's son that we descend into */
+	size_t sid; /* Index of the node's son that we descend into */
 };
 
 static void
-push(struct list_head *bt, struct Btree_Node *node, size_t idx)
+push(struct list_head *bt, struct Btree_Node *node, size_t sid)
 {
 	struct Frame *new = xmalloc(sizeof(*new));
 	INIT_LIST_HEAD(&new->h);
 	new->node = node;
-	new->idx = idx;
+	new->sid = sid;
 
 	list_add(&new->h, bt);
+}
+
+static struct Btree_Node *
+pop(struct list_head *bt)
+{
+	assert(!list_empty(bt));
+
+	struct Frame *x = list_entry(bt->next, struct Frame, h);
+	struct Btree_Node *node = x->node;
+
+	__list_del(bt, bt->next->next);
+	free(x);
+
+	return node;
+}
+
+void
+btree_destroy(struct Btree_Head *head)
+{
+	if (head->root == NULL || head->height == 0) {
+		free(head->root);
+		return;
+	}
+
+	struct Btree_Node *node = head->root;
+	struct Btree_Node *son;
+	uint8_t h = head->height - 1;
+	LIST_HEAD(bt);
+
+	for (;;) {
+		if (h == 0) {
+			while (node->size != 0)
+				free(node->u.sons[node->size--]);
+			free(*node->u.sons);
+		} else {
+			son = node->u.sons[node->size];
+
+			if (node->size == 0)
+				*node->u.sons = NULL;
+			else
+				--node->size;
+
+			if (son != NULL) {
+				push(&bt, node, (size_t) -1);
+				node = son;
+				--h;
+				continue;
+			}
+		}
+
+		free(node);
+
+		if (list_empty(&bt))
+			return;
+
+		node = pop(&bt);
+		++h;
+	}
 }
 
 /*
@@ -42,65 +101,129 @@ push(struct list_head *bt, struct Btree_Node *node, size_t idx)
  * @bt: backtrace of interior nodes -- the path from the root to the
  *      target leaf, excluding the latter
  */
-static struct Btree_Leaf *
+static struct Btree_Node *
 target_leaf(const struct Btree_Head *head, uint32_t key, struct list_head *bt)
 {
-	assert(head->root != NULL);
 	assert(list_empty(bt));
 
-	const struct Btree_Node *x = head->root;
+	struct Btree_Node *x = head->root;
 
 	uint8_t h;
 	for (h = head->height; h != 0; --h) {
 		const size_t i = _index(key, x->keys, x->size);
 		push(bt, x, i);
-		x = x->sons[i];
+		x = x->u.sons[i];
 	}
 
-	return (struct Btree_Leaf *) x;
+	return x;
 }
 
-static struct Btree_Leaf *
-left_brother(const struct Btree_Leaf *x, const struct list_head *bt)
+static int
+squeeze_left(uint32_t key, struct Btree_Node *node, size_t pos,
+	     const struct list_head *bt)
 {
+	assert(node->size == ARRAY_SIZE(node->keys));
+
 	if (list_empty(bt))
-		return NULL;
-	const struct Frame *p = list_first_entry(bt, struct Frame, h);
-	return p->idx == 0 ? NULL : p->node->sons[p->idx - 1];
+		return -1; /* the only leaf */
+	const struct Frame *parent = list_first_entry(bt, struct Frame, h);
+
+	if (parent->sid == 0)
+#warning "XXX Left brother availability criteria is incorrect."
+		return -1; /* no left brother */
+	struct Btree_Node *left = parent->node->u.sons[parent->sid - 1];
+
+	if (left->size == ARRAY_SIZE(left->keys))
+		return -1; /* left brother is full */
+
+	if (pos == 0) {
+		left->keys[left->size++] = key;
+		return 0;
+	}
+
+	left->keys[left->size++] = *node->keys;
+	if (pos > 1)
+		memmove(node->keys, node->keys + 1,
+			(pos - 1) * sizeof(*node->keys));
+	node->keys[pos - 1] = key;
+
+	parent->node->keys[parent->sid - 1] = left->keys[left->size - 1];
+	return 0;
 }
 
-static struct Btree_Leaf *
-right_brother(const struct Btree_Leaf *x, const struct list_head *bt)
+static int
+squeeze_right(uint32_t key, struct Btree_Node *node, size_t pos,
+	      const struct list_head *bt)
 {
+	assert(node->size == ARRAY_SIZE(node->keys));
+
 	if (list_empty(bt))
-		return NULL;
-	const struct Frame *p = list_first_entry(bt, struct Frame, h);
-	return p->idx == p->node->size ? NULL : p->node->sons[p->idx + 1];
+		return -1; /* the only leaf */
+	const struct Frame *parent = list_first_entry(bt, struct Frame, h);
+
+	if (parent->sid == parent->node->size)
+#warning "XXX Right brother availability criteria is incorrect."
+		return -1; /* no right brother */
+	struct Btree_Node *right = parent->node->u.sons[parent->sid + 1];
+
+	if (right->size == ARRAY_SIZE(right->keys))
+		return -1; /* right brother is full */
+
+	memmove(right->keys + 1, right->keys,
+		right->size * sizeof(*right->keys));
+	++right->size;
+
+	if (pos == ARRAY_SIZE(node->keys)) {
+		*right->keys = key;
+		return 0;
+	}
+
+	*right->keys = node->keys[node->size - 1];
+	if (pos < ARRAY_SIZE(node->keys) - 1)
+		memmove(node->keys + pos + 1, node->keys + pos,
+			(ARRAY_SIZE(node->keys) - pos - 1)
+			* sizeof(*node->keys));
+	node->keys[pos] = key;
+
+	parent->node->keys[parent->sid] = node->keys[node->size - 1];
+	return 0;
 }
 
 int
 btree_insert(struct Btree_Head *head, uint32_t key)
 {
-	LIST_HEAD(bt); /* backtrace */
-	struct Btree_Leaf *x = target_leaf(head, key, &bt);
-	const size_t i = _index(key, x->vals, x->size);
+	struct Btree_Node *x;
+	if (head->root == NULL) {
+		x = xmalloc(sizeof(*x));
+		*x->keys = key;
+		x->size = 1;
+		INIT_LIST_HEAD(&x->u.leaf);
+		head->root = x;
+		list_add(&x->u.leaf, &head->leaves);
+		return 0;
+	}
 
-	if (i < x->size && x->vals[i] == key)
+	LIST_HEAD(bt); /* backtrace */
+	x = target_leaf(head, key, &bt);
+	const size_t i = _index(key, x->keys, x->size);
+
+	if (i < x->size && x->keys[i] == key)
 		return -1; /* key exists */
 
-	if (x->size < ARRAY_SIZE(x->vals)) {
+	if (x->size < ARRAY_SIZE(x->keys)) {
 		if (i < x->size)
-			memmove(x->vals + i + 1, x->vals + i, x->size - i);
+			memmove(x->keys + i + 1, x->keys + i,
+				(x->size - i) * sizeof(*x->keys));
 
-		x->vals[i] = key;
+		x->keys[i] = key;
 		++x->size;
 
 		return 0;
 	}
 
-#warning "XXX Check left/right brothers for vacancies."
-
-	struct Btree_Leaf *y = left_brother(x, &bt);
+	if (squeeze_left(key, x, i, &bt) == 0 ||
+	    squeeze_right(key, x, i, &bt) == 0)
+		return 0;
 
 	/* The leaf is full and needs to be splitted. */
 	assert(0 == 1); /* XXX not implemented */
@@ -189,67 +312,6 @@ btree_insert(struct Btree_Head *head, uint32_t key)
 	}
 
 	assert(0 == 1); /* XXX not implemented */
-}
-
-static struct Btree_Node *
-pop(struct list_head *bt)
-{
-	assert(!list_empty(bt));
-
-	struct Frame *x = list_entry(bt->next, struct Frame, h);
-	struct Btree_Node *node = x->node;
-
-	__list_del(bt, bt->next->next);
-	free(x);
-
-	return node;
-}
-
-void
-btree_destroy(struct Btree_Head *head)
-{
-	if (head->height == 0)
-		return;
-
-	if (head->height > 1) {
-		LIST_HEAD(bt); /* backtrace */
-		struct Btree_Node *node = head->root;
-		struct Btree_Node *son;
-		uint8_t depth = 0;
-
-		for (;;) {
-			if ((son = node->sons[node->size]) == NULL) {
-				assert(node->size == 0);
-				if (depth == 0)
-					goto end;
-
-				node = pop(&bt);
-				--depth;
-				continue;
-			}
-
-			if (depth == head->height - 2) {
-				/* right above leaf level */
-				size_t i;
-				for (i = 0; i <= node->size; ++i)
-					free(node->sons[i]);
-				node->size = 0;
-				*node->sons = NULL;
-			} else {
-				if (node->size == 0)
-					*node->sons = NULL;
-				else
-					--node->size;
-
-				push(&bt, node);
-				node = son;
-				++depth;
-			}
-		}
-	}
-
-end:
-	free(head->root);
 }
 
 100 110 120 130 140 150 160 170  (k=4)
