@@ -23,9 +23,9 @@ int main(void)
 	assert(btree_insert(&t, 227) == 0);
 	assert(btree_insert(&t, 235) == 0);
 	assert(btree_insert(&t, 103) == 0);
-	assert(btree_insert(&t, 103) == 0);
+	assert(btree_insert(&t, 103) == -1);
 	assert(btree_insert(&t, 28) == 0);
-	assert(btree_insert(&t, 113) == 0);
+	assert(btree_insert(&t, 113) == -1);
 	assert(btree_insert(&t, 250) == 0);
 	assert(btree_insert(&t, 44) == 0);
 	assert(btree_insert(&t, 35) == 0);
